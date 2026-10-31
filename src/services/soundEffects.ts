@@ -391,6 +391,51 @@ class SoundEffectsService {
       osc.stop(this.ctx.currentTime + i * 0.16 + 0.45);
     });
   }
+
+  // Clash of Clans Star Earn Fanfare Chime
+  public playStarEarn(starIndex: number = 1) {
+    if (this.isMuted) return;
+    this.initCtx();
+    if (!this.ctx || !this.compressor) return;
+
+    const baseFreq = 523.25 * Math.pow(1.2, starIndex);
+    const chords = [baseFreq, baseFreq * 1.25, baseFreq * 1.5];
+    const now = this.ctx.currentTime;
+
+    chords.forEach((freq, idx) => {
+      if (!this.ctx || !this.compressor) return;
+      const osc = this.ctx.createOscillator();
+      const gain = this.ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.05);
+      gain.gain.setValueAtTime(0.4, now + idx * 0.05);
+      gain.gain.exponentialRampToValueAtTime(0.001, now + idx * 0.05 + 0.6);
+      osc.connect(gain);
+      gain.connect(this.compressor);
+      osc.start(now + idx * 0.05);
+      osc.stop(now + idx * 0.05 + 0.6);
+    });
+  }
+
+  // Clash of Clans Gold / Trophy Counter Chime
+  public playCoinCount() {
+    if (this.isMuted) return;
+    this.initCtx();
+    if (!this.ctx || !this.compressor) return;
+
+    const osc = this.ctx.createOscillator();
+    const gain = this.ctx.createGain();
+    const now = this.ctx.currentTime;
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(987.77, now);
+    osc.frequency.exponentialRampToValueAtTime(1318.51, now + 0.08);
+    gain.gain.setValueAtTime(0.3, now);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.12);
+    osc.connect(gain);
+    gain.connect(this.compressor);
+    osc.start(now);
+    osc.stop(now + 0.12);
+  }
 }
 
 export const soundManager = new SoundEffectsService();

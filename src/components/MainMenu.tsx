@@ -44,6 +44,22 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       ? Math.round((statsRecord.wins / (statsRecord.wins + statsRecord.losses)) * 100)
       : 0;
 
+  const trophies = (() => {
+    try {
+      const saved = localStorage.getItem('bastion_player_trophies');
+      if (saved) return Math.max(0, parseInt(saved, 10));
+    } catch {}
+    return Math.max(0, 1000 + statsRecord.wins * 30 - statsRecord.losses * 20);
+  })();
+
+  const getLeague = (trophies: number) => {
+    if (trophies >= 2000) return { name: 'CHAMPION', color: 'text-purple-400', badge: 'bg-purple-950/80 border-purple-500' };
+    if (trophies >= 1500) return { name: 'GOLD LEAGUE', color: 'text-amber-300', badge: 'bg-amber-950/80 border-amber-400' };
+    if (trophies >= 1000) return { name: 'SILVER LEAGUE', color: 'text-slate-200', badge: 'bg-slate-800/80 border-slate-400' };
+    return { name: 'BRONZE LEAGUE', color: 'text-amber-600', badge: 'bg-amber-950/80 border-amber-800' };
+  };
+  const league = getLeague(trophies);
+
   return (
     <div className="relative w-full min-h-screen flex flex-col items-center justify-between p-4 md:p-8 text-slate-100 overflow-hidden">
       {/* Dynamic Background Elements */}
@@ -54,8 +70,17 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       <div className="w-full max-w-5xl flex items-center justify-between border-b border-slate-800/80 pb-3 gap-2">
         {/* Tactical Profile Stats */}
         <div className="flex items-center gap-3 bg-slate-900/80 px-3.5 py-1.5 rounded-xl border border-slate-800">
-          <Trophy className="w-4 h-4 text-amber-400" />
+          <div className={`px-2 py-0.5 rounded-lg border text-[10px] font-mono font-black ${league.badge} ${league.color} flex items-center gap-1`}>
+            <Trophy className="w-3.5 h-3.5" />
+            <span>{league.name}</span>
+          </div>
+
           <div className="flex items-center gap-2 text-xs font-mono">
+            <div>
+              <span className="text-slate-400">TROPHIES:</span>{' '}
+              <strong className="text-amber-400">{trophies} 🏆</strong>
+            </div>
+            <span>•</span>
             <div>
               <span className="text-slate-400">RECORD:</span>{' '}
               <strong className="text-cyan-400">{statsRecord.wins}W</strong> -{' '}
@@ -63,7 +88,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             </div>
             <span>•</span>
             <div>
-              <span className="text-slate-400">WIN RATE:</span>{' '}
+              <span className="text-slate-400">WIN:</span>{' '}
               <strong className="text-emerald-400">{winRate}%</strong>
             </div>
             <span>•</span>
@@ -98,21 +123,21 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
       {/* Hero Section: Game Logo & Core Promise */}
       <div className="flex flex-col items-center text-center max-w-3xl my-auto py-6">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-cyan-950/80 border border-cyan-800 text-cyan-400 text-xs font-mono tracking-widest uppercase mb-3 shadow-lg shadow-cyan-950/50">
-          <Flame className="w-3.5 h-3.5" />
-          2D Real-Time 1v1 Base Assault
+        <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-gradient-to-r from-amber-500/20 to-yellow-500/20 border border-amber-500/60 text-amber-300 text-xs font-mono tracking-widest uppercase mb-3 shadow-lg shadow-amber-950/50">
+          <Flame className="w-3.5 h-3.5 text-amber-400" />
+          Real-Time 1v1 Clan Base Assault • 3D Arena
         </div>
 
-        <h1 className="text-6xl md:text-8xl font-black tracking-tight font-mono uppercase bg-gradient-to-b from-slate-100 via-slate-200 to-slate-400 bg-clip-text text-transparent drop-shadow-2xl">
+        <h1 className="text-6xl md:text-8xl font-black tracking-tight font-mono uppercase bg-gradient-to-b from-yellow-100 via-amber-300 to-amber-500 bg-clip-text text-transparent drop-shadow-2xl">
           BASTION
         </h1>
 
-        <p className="text-base md:text-xl font-mono text-cyan-400 tracking-wider mt-2 font-semibold">
-          60 Seconds to Prepare. 120 Seconds to Conquer.
+        <p className="text-base md:text-xl font-mono text-amber-400 tracking-wider mt-2 font-black">
+          60s To Recruit • 100s To Conquer • Clash Star System
         </p>
 
-        <p className="text-xs md:text-sm text-slate-400 max-w-lg mt-1">
-          Identical 100 Command Points. Symmetrical pre-installed bases. Sentry towers, heavy titans, and devastating mortar artillery.
+        <p className="text-xs md:text-sm text-slate-300 max-w-lg mt-1 font-mono">
+          Decimate enemy headquarters or achieve 50%+ base destruction for 1, 2, or 3 Stars. No Draws — Victory or Defeat!
         </p>
 
         {/* Primary Action: 2-Player LAN Battle Card */}

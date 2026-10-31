@@ -42,10 +42,18 @@ export const App: React.FC = () => {
 
     if (newPhase === 'GAME_OVER') {
       const stats = simulationRef.current.stats;
+      const isWin = stats.winner === playerRole;
+
+      // Update Clash of Clans Trophies in LocalStorage
+      try {
+        const currentTrophies = parseInt(localStorage.getItem('bastion_player_trophies') || '1000', 10);
+        const nextTrophies = Math.max(0, currentTrophies + (isWin ? 30 : -20));
+        localStorage.setItem('bastion_player_trophies', nextTrophies.toString());
+      } catch {}
+
       setStatsRecord((prev) => {
-        const isWin = stats.winner === playerRole;
         const nextWins = isWin ? prev.wins + 1 : prev.wins;
-        const nextLosses = !isWin && stats.winner !== 'draw' ? prev.losses + 1 : prev.losses;
+        const nextLosses = !isWin ? prev.losses + 1 : prev.losses;
         const nextStreak = isWin ? prev.streak + 1 : 0;
         const updated = { wins: nextWins, losses: nextLosses, streak: nextStreak };
         try {

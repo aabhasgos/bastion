@@ -77,6 +77,12 @@ export class GameSimulation {
     winner: 'draw',
     winReason: '',
     matchDuration: 0,
+    p1Stars: 0,
+    p2Stars: 0,
+    p1DestructionPercent: 0,
+    p2DestructionPercent: 0,
+    p1HQDestroyed: false,
+    p2HQDestroyed: false,
     p1HQHpPercent: 100,
     p2HQHpPercent: 100,
     p1TotalBuildingHpPercent: 100,
@@ -89,6 +95,7 @@ export class GameSimulation {
     p2DamageDealt: 0,
     p1StructuresDestroyed: 0,
     p2StructuresDestroyed: 0,
+    trophiesChange: 0,
   };
 
   private nextEntityId: number = 1000;
@@ -125,6 +132,12 @@ export class GameSimulation {
       winner: 'draw',
       winReason: '',
       matchDuration: 0,
+      p1Stars: 0,
+      p2Stars: 0,
+      p1DestructionPercent: 0,
+      p2DestructionPercent: 0,
+      p1HQDestroyed: false,
+      p2HQDestroyed: false,
       p1HQHpPercent: 100,
       p2HQHpPercent: 100,
       p1TotalBuildingHpPercent: 100,
@@ -137,6 +150,7 @@ export class GameSimulation {
       p2DamageDealt: 0,
       p1StructuresDestroyed: 0,
       p2StructuresDestroyed: 0,
+      trophiesChange: 0,
     };
   }
 
@@ -946,16 +960,44 @@ export class GameSimulation {
     }
   }
 
+  public getDestructionPercent(attacker: PlayerId): number {
+    const defender = attacker === 'p1' ? 'p2' : 'p1';
+    let currentHp = 0;
+    let maxHp = 0;
+    for (const s of this.structures) {
+      if (s.owner === defender) {
+        currentHp += Math.max(0, s.hp);
+        maxHp += s.maxHp;
+      }
+    }
+    if (maxHp === 0) return 100;
+    const destroyed = maxHp - currentHp;
+    return Math.min(100, Math.max(0, Math.round((destroyed / maxHp) * 100)));
+  }
+
+  public getPlayerStars(attacker: PlayerId): number {
+    const defender = attacker === 'p1' ? 'p2' : 'p1';
+    const defHQ = this.structures.find((s) => s.owner === defender && s.type === 'hq');
+    const hqDestroyed = !defHQ || defHQ.hp <= 0;
+    const destruction = this.getDestructionPercent(attacker);
+
+    if (hqDestroyed && destruction >= 85) return 3;
+    if (hqDestroyed && destruction >= 50) return 2;
+    if (hqDestroyed) return 2;
+    if (destruction >= 50) return 1;
+    return 0;
+  }
+
   private checkHQDestruction() {
     const p1HQ = this.structures.find((s) => s.owner === 'p1' && s.type === 'hq');
     const p2HQ = this.structures.find((s) => s.owner === 'p2' && s.type === 'hq');
 
     if (p1HQ && p1HQ.hp <= 0 && this.phase !== 'GAME_OVER') {
       this.triggerSlowMoKO();
-      this.endMatch('p2', 'Alpha Citadel Headquarters Obliterated');
+      this.endMatch('p2', 'Crimson Vanguard Obliterated the Alpha Citadel (3-Star 100% K.O.)');
     } else if (p2HQ && p2HQ.hp <= 0 && this.phase !== 'GAME_OVER') {
       this.triggerSlowMoKO();
-      this.endMatch('p1', 'Crimson Fortress Headquarters Obliterated');
+      this.endMatch('p1', 'Iron Syndicate Obliterated the Crimson Fortress (3-Star 100% K.O.)');
     }
   }
 
@@ -966,65 +1008,64 @@ export class GameSimulation {
   }
 
   private evaluateTimeoutVictory() {
-    const p1HQ = this.structures.find((s) => s.owner === 'p1' && s.type === 'hq')!;
-    const p2HQ = this.structures.find((s) => s.owner === 'p2' && s.type === 'hq')!;
+    const p1Stars = this.getPlayerStars('p1');
+    const p2Stars = this.getPlayerStars('p2');
+    const p1Destruction = this.getDestructionPercent('p1');
+    const p2Destruction = this.getDestructionPercent('p2');
 
-    const p1HQPercent = (p1HQ.hp / p1HQ.maxHp) * 100;
-    const p2HQPercent = (p2HQ.hp / p2HQ.maxHp) * 100;
-
-    let p1BldHp = 0, p1BldMax = 0;
-    let p2BldHp = 0, p2BldMax = 0;
-
-    for (const s of this.structures) {
-      if (s.owner === 'p1') {
-        p1BldHp += s.hp;
-        p1BldMax += s.maxHp;
-      } else {
-        p2BldHp += s.hp;
-        p2BldMax += s.maxHp;
-      }
-    }
-
-    const p1TotalBldPercent = (p1BldHp / p1BldMax) * 100;
-    const p2TotalBldPercent = (p2BldHp / p2BldMax) * 100;
-
-    this.stats.p1HQHpPercent = Math.round(p1HQPercent);
-    this.stats.p2HQHpPercent = Math.round(p2HQPercent);
-    this.stats.p1TotalBuildingHpPercent = Math.round(p1TotalBldPercent);
-    this.stats.p2TotalBuildingHpPercent = Math.round(p2TotalBldPercent);
-
-    if (p1HQPercent > p2HQPercent) {
-      this.endMatch('p1', `Timer Expired: Higher Headquarters Health (${Math.round(p1HQPercent)}% vs ${Math.round(p2HQPercent)}%)`);
+    // 1. Clash of Clans: Compare Stars (Most stars wins)
+    if (p1Stars > p2Stars) {
+      this.endMatch('p1', `Victory by Stars: ${p1Stars} ⭐ vs ${p2Stars} ⭐ (${p1Destruction}% Damage)`);
       return;
-    } else if (p2HQPercent > p1HQPercent) {
-      this.endMatch('p2', `Timer Expired: Higher Headquarters Health (${Math.round(p2HQPercent)}% vs ${Math.round(p1HQPercent)}%)`);
+    } else if (p2Stars > p1Stars) {
+      this.endMatch('p2', `Victory by Stars: ${p2Stars} ⭐ vs ${p1Stars} ⭐ (${p2Destruction}% Damage)`);
       return;
     }
 
-    if (p1TotalBldPercent > p2TotalBldPercent) {
-      this.endMatch('p1', `Timer Expired: Superior Base Infrastructure Integrity (${Math.round(p1TotalBldPercent)}% vs ${Math.round(p2TotalBldPercent)}%)`);
+    // 2. Stars tied: Compare Base Destruction Percentage (%)
+    if (p1Destruction > p2Destruction) {
+      this.endMatch('p1', `Victory by Destruction: ${p1Destruction}% vs ${p2Destruction}% Base Decimation`);
       return;
-    } else if (p2TotalBldPercent > p1TotalBldPercent) {
-      this.endMatch('p2', `Timer Expired: Superior Base Infrastructure Integrity (${Math.round(p2TotalBldPercent)}% vs ${Math.round(p1TotalBldPercent)}%)`);
+    } else if (p2Destruction > p1Destruction) {
+      this.endMatch('p2', `Victory by Destruction: ${p2Destruction}% vs ${p1Destruction}% Base Decimation`);
       return;
     }
 
+    // 3. Destruction tied: Compare Total Combat Damage Inflicted
     if (this.stats.p1DamageDealt > this.stats.p2DamageDealt) {
-      this.endMatch('p1', `Timer Expired: Greater Base Assault Damage (${Math.round(this.stats.p1DamageDealt)} vs ${Math.round(this.stats.p2DamageDealt)})`);
+      this.endMatch('p1', `Victory by Firepower: ${Math.round(this.stats.p1DamageDealt)} vs ${Math.round(this.stats.p2DamageDealt)} Damage`);
       return;
     } else if (this.stats.p2DamageDealt > this.stats.p1DamageDealt) {
-      this.endMatch('p2', `Timer Expired: Greater Base Assault Damage (${Math.round(this.stats.p2DamageDealt)} vs ${Math.round(this.stats.p1DamageDealt)})`);
+      this.endMatch('p2', `Victory by Firepower: ${Math.round(this.stats.p2DamageDealt)} vs ${Math.round(this.stats.p1DamageDealt)} Damage`);
       return;
     }
 
-    this.endMatch('draw', 'Timer Expired: Dead Heat Across All Metrics');
+    // 4. Decisive tiebreak: Fewer squad losses wins (NEVER A DRAW!)
+    if (this.stats.p1UnitsLost <= this.stats.p2UnitsLost) {
+      this.endMatch('p1', `Tactical Decisive Victory by Squad Preservation`);
+    } else {
+      this.endMatch('p2', `Tactical Decisive Victory by Squad Preservation`);
+    }
   }
 
-  private endMatch(winner: PlayerId | 'draw', reason: string) {
+  private endMatch(winner: PlayerId, reason: string) {
     this.phase = 'GAME_OVER';
     this.stats.winner = winner;
     this.stats.winReason = reason;
     this.stats.matchDuration = Math.round(this.totalMatchElapsed);
+
+    const p1HQ = this.structures.find((s) => s.owner === 'p1' && s.type === 'hq');
+    const p2HQ = this.structures.find((s) => s.owner === 'p2' && s.type === 'hq');
+    this.stats.p1HQHpPercent = p1HQ ? Math.max(0, Math.round((p1HQ.hp / p1HQ.maxHp) * 100)) : 0;
+    this.stats.p2HQHpPercent = p2HQ ? Math.max(0, Math.round((p2HQ.hp / p2HQ.maxHp) * 100)) : 0;
+    this.stats.p1DestructionPercent = this.getDestructionPercent('p1');
+    this.stats.p2DestructionPercent = this.getDestructionPercent('p2');
+    this.stats.p1HQDestroyed = !p2HQ || p2HQ.hp <= 0;
+    this.stats.p2HQDestroyed = !p1HQ || p1HQ.hp <= 0;
+    this.stats.p1Stars = this.stats.p1HQDestroyed ? 3 : this.getPlayerStars('p1');
+    this.stats.p2Stars = this.stats.p2HQDestroyed ? 3 : this.getPlayerStars('p2');
+    this.stats.trophiesChange = winner === 'p1' ? 30 : -20;
+
     soundManager.stopBattleMusic();
 
     if (winner === 'p1') {

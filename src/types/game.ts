@@ -147,6 +147,12 @@ export interface MatchStats {
   winner: PlayerId | 'draw';
   winReason: string;
   matchDuration: number;
+  p1Stars: number;
+  p2Stars: number;
+  p1DestructionPercent: number;
+  p2DestructionPercent: number;
+  p1HQDestroyed: boolean;
+  p2HQDestroyed: boolean;
   p1HQHpPercent: number;
   p2HQHpPercent: number;
   p1TotalBuildingHpPercent: number;
@@ -159,6 +165,7 @@ export interface MatchStats {
   p2DamageDealt: number;
   p1StructuresDestroyed: number;
   p2StructuresDestroyed: number;
+  trophiesChange: number;
 }
 
 export interface PlayerSelectionState {

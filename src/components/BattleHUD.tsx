@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { GameSimulation } from '../engine/gameSimulation';
 import type { UnitClass, UnitInstance, PlayerId } from '../types/game';
 import { soundManager } from '../services/soundEffects';
-import { UNIT_DEFINITIONS } from '../constants/gameConfig';
+import { CLAN_DEFINITIONS, UNIT_DEFINITIONS } from '../constants/gameConfig';
 import { COMMANDER_P1, COMMANDER_P2 } from '../constants/commanders';
 import {
   Shield,
@@ -14,13 +14,16 @@ import {
   Volume2,
   VolumeX,
   Radio,
+  Sparkles,
 } from 'lucide-react';
 
 interface BattleHUDProps {
   simulation: GameSimulation;
   activeDeployUnit: UnitClass | null;
+  activeUltimate: boolean;
   selectedUnits: UnitInstance[];
   onSelectDeployUnit: (unitClass: UnitClass | null) => void;
+  onToggleUltimate: () => void;
   onMuteToggle: () => void;
   isMuted: boolean;
   onSurrender: () => void;
@@ -30,14 +33,17 @@ interface BattleHUDProps {
 export const BattleHUD: React.FC<BattleHUDProps> = ({
   simulation,
   activeDeployUnit,
+  activeUltimate,
   selectedUnits,
   onSelectDeployUnit,
+  onToggleUltimate,
   onMuteToggle,
   isMuted,
   onSurrender,
   playerRole = 'p1',
 }) => {
   const isP1 = playerRole === 'p1';
+  const clan = isP1 ? CLAN_DEFINITIONS.p1 : CLAN_DEFINITIONS.p2;
 
   const p1HQ = simulation.structures.find((s) => s.owner === 'p1' && s.type === 'hq');
   const p2HQ = simulation.structures.find((s) => s.owner === 'p2' && s.type === 'hq');
@@ -59,6 +65,8 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
 
   const timeRemaining = Math.max(0, Math.ceil(simulation.phaseTimeRemaining));
   const myReserve = isP1 ? simulation.p1Reserve : simulation.p2Reserve;
+  const myUltimateCd = isP1 ? simulation.p1UltimateCooldown : simulation.p2UltimateCooldown;
+  const isUltimateReady = myUltimateCd <= 0;
 
   // "ROUND 1 - FIGHT!" Announcement Splash
   const [showFightBanner, setShowFightBanner] = useState<boolean>(true);
@@ -88,7 +96,7 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
 
   return (
     <div className="w-full flex flex-col justify-between pointer-events-none select-none h-full relative">
-      {/* 1. TEKKEN-STYLE "ROUND 1 - FIGHT!" CINEMATIC SPLASH */}
+      {/* 1. TEKKEN-STYLE "ROUND 1 - FIGHT!" SPLASH */}
       {showFightBanner && (
         <div className="fixed inset-0 flex flex-col items-center justify-center z-50 pointer-events-none animate-out fade-out duration-700 delay-1000 fill-mode-forwards">
           <div className="text-center">
@@ -103,10 +111,9 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
       )}
 
       {/* 2. TEKKEN FIGHTING GAME TOP HEALTH BAR & FIGHT CLOCK */}
-      <div className="w-full max-w-6xl mx-auto flex items-center justify-between pt-2 px-2 pointer-events-auto">
+      <div className="w-full max-w-6xl mx-auto flex items-center justify-between pt-2 px-3 pointer-events-auto">
         {/* P1 Commander (Victor Vance - Iron Fist) */}
         <div className="flex items-center gap-3 w-[42%]">
-          {/* Avatar Box */}
           <div className="relative w-14 h-14 md:w-16 md:h-16 rounded-xl bg-slate-900 border-2 border-cyan-400 shadow-[0_0_20px_rgba(56,189,248,0.5)] overflow-hidden shrink-0">
             <div dangerouslySetInnerHTML={{ __html: COMMANDER_P1.avatarSvg }} className="w-full h-full p-1" />
             <span className="absolute bottom-0 inset-x-0 bg-cyan-950/90 text-[8px] font-mono text-center font-bold text-cyan-300">
@@ -114,7 +121,6 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
             </span>
           </div>
 
-          {/* Name & Lifebar */}
           <div className="flex-1 flex flex-col">
             <div className="flex justify-between items-baseline mb-1">
               <span className="font-black text-sm md:text-base font-mono tracking-wider text-cyan-300 uppercase drop-shadow">
@@ -123,14 +129,11 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
               <span className="text-xs font-mono font-bold text-slate-300">{p1HpPercent}%</span>
             </div>
 
-            {/* Tekken Lifebar (Gradient + Yellow Chip Damage Trail) */}
             <div className="relative w-full h-4 bg-slate-950 border-2 border-slate-700 rounded-sm overflow-hidden shadow-inner">
-              {/* Trailing Yellow Bar */}
               <div
                 className="absolute inset-y-0 left-0 bg-amber-400 transition-all duration-300"
                 style={{ width: `${p1TrailHp}%` }}
               />
-              {/* Active Cyan Life Bar */}
               <div
                 className="absolute inset-y-0 left-0 bg-gradient-to-r from-blue-600 via-cyan-400 to-emerald-400 transition-all duration-150"
                 style={{ width: `${p1HpPercent}%` }}
@@ -157,7 +160,6 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
 
         {/* P2 Commander (Raven Kuro - Blood Reaper) */}
         <div className="flex items-center gap-3 w-[42%] flex-row-reverse">
-          {/* Avatar Box */}
           <div className="relative w-14 h-14 md:w-16 md:h-16 rounded-xl bg-slate-900 border-2 border-rose-500 shadow-[0_0_20px_rgba(239,68,68,0.5)] overflow-hidden shrink-0">
             <div dangerouslySetInnerHTML={{ __html: COMMANDER_P2.avatarSvg }} className="w-full h-full p-1" />
             <span className="absolute bottom-0 inset-x-0 bg-rose-950/90 text-[8px] font-mono text-center font-bold text-rose-300">
@@ -165,7 +167,6 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
             </span>
           </div>
 
-          {/* Name & Lifebar */}
           <div className="flex-1 flex flex-col text-right">
             <div className="flex justify-between items-baseline mb-1 flex-row-reverse">
               <span className="font-black text-sm md:text-base font-mono tracking-wider text-rose-400 uppercase drop-shadow">
@@ -174,7 +175,6 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
               <span className="text-xs font-mono font-bold text-slate-300">{p2HpPercent}%</span>
             </div>
 
-            {/* Tekken Lifebar */}
             <div className="relative w-full h-4 bg-slate-950 border-2 border-slate-700 rounded-sm overflow-hidden shadow-inner">
               <div
                 className="absolute inset-y-0 right-0 bg-amber-400 transition-all duration-300"
@@ -189,7 +189,7 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
         </div>
       </div>
 
-      {/* Top Right Mini Buttons */}
+      {/* Top Right Mini Audio & Surrender Buttons */}
       <div className="absolute top-3 right-3 flex items-center gap-2 pointer-events-auto z-10">
         <button
           onClick={onMuteToggle}
@@ -206,26 +206,54 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
         </button>
       </div>
 
-      {/* 3. BOTTOM CARRIER DOCK: CLEAN, INTUITIVE & NON-OVERLAPPING */}
-      <div className="w-full max-w-5xl mx-auto pb-3 px-2 pointer-events-auto">
+      {/* 3. BOTTOM CARRIER DOCK WITH CLAN ULTIMATE STRIKE & TROOP CARRIER */}
+      <div className="w-full max-w-5xl mx-auto pb-3 px-3 pointer-events-auto">
         <div className="bg-slate-950/90 backdrop-blur-xl border border-slate-800 rounded-2xl p-3 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-3">
+          {/* Clan Ultimate Ability Button */}
+          <div className="shrink-0 flex items-center gap-2">
+            <button
+              onClick={() => {
+                if (isUltimateReady) {
+                  soundManager.playSelect();
+                  onToggleUltimate();
+                }
+              }}
+              disabled={!isUltimateReady}
+              className={`relative px-4 py-3 rounded-xl border font-mono font-bold text-xs uppercase tracking-wider flex items-center gap-2 transition shadow-lg ${
+                activeUltimate
+                  ? 'bg-rose-600 text-white border-rose-400 shadow-[0_0_20px_rgba(239,68,68,0.8)] scale-105 animate-pulse'
+                  : isUltimateReady
+                  ? 'bg-gradient-to-r from-amber-500 to-orange-600 hover:from-amber-400 hover:to-orange-500 text-white border-amber-300 shadow-[0_0_15px_rgba(245,158,11,0.5)] active:scale-95'
+                  : 'bg-slate-900 text-slate-500 border-slate-800 cursor-not-allowed opacity-60'
+              }`}
+            >
+              <Sparkles className={`w-4 h-4 ${isUltimateReady ? 'text-yellow-200 animate-spin' : 'text-slate-600'}`} style={{ animationDuration: '4s' }} />
+              <div className="flex flex-col items-start text-left">
+                <span className="leading-none text-[11px] font-black">{clan.ultimateName}</span>
+                <span className="text-[9px] mt-0.5 opacity-90">
+                  {isUltimateReady ? (activeUltimate ? 'CLICK FIELD TO FIRE' : 'STRIKE READY') : `COOLDOWN ${Math.ceil(myUltimateCd)}s`}
+                </span>
+              </div>
+            </button>
+          </div>
+
           {/* Reserve Carrier Header & Units Grid */}
           <div className="flex-1 flex flex-col gap-1.5 w-full">
             <div className="flex items-center justify-between text-xs font-mono">
               <div className="flex items-center gap-1.5 text-cyan-400 font-bold tracking-wider">
                 <Radio className="w-4 h-4 text-cyan-400 animate-pulse" />
                 <span>
-                  DEPLOYMENT CARRIER ({myReserve.length} UNITS READY)
+                  CARRIER ({myReserve.length} UNITS READY)
                 </span>
               </div>
               {activeDeployUnit && (
                 <span className="text-amber-400 animate-pulse font-bold text-[11px]">
-                  Click inside friendly base to deploy {activeDeployUnit.toUpperCase()}!
+                  Click inside your base to deploy {UNIT_DEFINITIONS[activeDeployUnit].name}!
                 </span>
               )}
             </div>
 
-            {/* Unit Cards Row */}
+            {/* Troop Cards Row */}
             <div className="flex items-center gap-2 overflow-x-auto py-1">
               {myReserve.length === 0 ? (
                 <div className="w-full py-2 text-center text-xs text-slate-500 font-mono">
@@ -248,11 +276,12 @@ export const BattleHUD: React.FC<BattleHUDProps> = ({
                           ? 'bg-gradient-to-r from-cyan-600 to-blue-600 text-white border-cyan-400 shadow-lg shadow-cyan-950/80 scale-105'
                           : 'bg-slate-900 hover:bg-slate-800 text-slate-200 border-slate-700/80 hover:border-cyan-500/50'
                       }`}
+                      title={`${def.name}: ${def.description}`}
                     >
                       {getUnitIcon(uClass)}
                       <div className="flex flex-col items-start text-left">
                         <span className="text-xs font-bold font-mono leading-none">{def.name.split(' ')[0]}</span>
-                        <span className="text-[10px] font-mono text-cyan-400 mt-1">Ready</span>
+                        <span className="text-[10px] font-mono text-cyan-400 mt-1">{def.cost} CP</span>
                       </div>
                     </button>
                   );

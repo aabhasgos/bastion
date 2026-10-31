@@ -21,6 +21,7 @@ export const App: React.FC = () => {
   const [showMultiplayerModal, setShowMultiplayerModal] = useState<boolean>(false);
 
   const [activeDeployUnit, setActiveDeployUnit] = useState<UnitClass | null>(null);
+  const [activeUltimate, setActiveUltimate] = useState<boolean>(false);
   const [selectedUnits, setSelectedUnits] = useState<UnitInstance[]>([]);
   const [isMuted, setIsMuted] = useState<boolean>(soundManager.isMuted);
 
@@ -57,6 +58,16 @@ export const App: React.FC = () => {
 
   useEffect(() => {
     simulationRef.current = new GameSimulation(handlePhaseChange);
+
+    const unlockAudio = () => {
+      soundManager.ensureAudioUnlocked();
+    };
+    window.addEventListener('pointerdown', unlockAudio, { once: true });
+    window.addEventListener('keydown', unlockAudio, { once: true });
+    return () => {
+      window.removeEventListener('pointerdown', unlockAudio);
+      window.removeEventListener('keydown', unlockAudio);
+    };
   }, [handlePhaseChange]);
 
   // Network subscriber for 2-Player LAN match
@@ -74,6 +85,8 @@ export const App: React.FC = () => {
         sim.startBattlePrep();
       } else if (msg.type === 'UNIT_DEPLOYED') {
         sim.deployUnit(msg.owner, msg.unitClass, msg.x, msg.y);
+      } else if (msg.type === 'ULTIMATE_CAST') {
+        sim.castUltimate(msg.owner, msg.x, msg.y);
       } else if (msg.type === 'REMOTE_COMMAND') {
         const { command } = msg;
         if (command.type === 'MOVE') {
@@ -103,6 +116,7 @@ export const App: React.FC = () => {
 
       sim.update(dt);
 
+      // AI Logic during Attack Phase
       if (sim.phase === 'ATTACK_PHASE' && gameMode === 'AI_PRACTICE') {
         const deployOrder = ai.updateDeployment(sim.totalMatchElapsed);
         if (deployOrder) {
@@ -112,6 +126,12 @@ export const App: React.FC = () => {
         const p1Units = sim.units.filter((u) => u.owner === 'p1');
         const aiUnits = sim.units.filter((u) => u.owner === 'p2');
         ai.updateUnitMicro(aiUnits, p1Units, sim.structures);
+
+        // AI Ultimate Cast (if cluster of player units detected and off cooldown)
+        if (sim.p2UltimateCooldown <= 0 && p1Units.length >= 2) {
+          const targetUnit = p1Units[0];
+          sim.castUltimate('p2', targetUnit.x, targetUnit.y);
+        }
       }
 
       setTick(currentTime);
@@ -139,6 +159,7 @@ export const App: React.FC = () => {
 
     setPhase('ARMY_SELECTION');
     setActiveDeployUnit(null);
+    setActiveUltimate(false);
     setSelectedUnits([]);
   };
 
@@ -155,6 +176,7 @@ export const App: React.FC = () => {
 
     setPhase('ARMY_SELECTION');
     setActiveDeployUnit(null);
+    setActiveUltimate(false);
     setSelectedUnits([]);
   };
 
@@ -208,6 +230,22 @@ export const App: React.FC = () => {
     }
   };
 
+  // Cast Clan Ultimate
+  const handleCastUltimate = (x: number, y: number) => {
+    const success = simulationRef.current.castUltimate(playerRole, x, y);
+    if (success) {
+      setActiveUltimate(false);
+      if (gameMode === 'ONLINE_MULTIPLAYER') {
+        networkManager.send({
+          type: 'ULTIMATE_CAST',
+          owner: playerRole,
+          x,
+          y,
+        });
+      }
+    }
+  };
+
   // Unit Selection
   const handleSelectionChange = (selectedIds: string[]) => {
     const selected = simulationRef.current.units.filter((u) => selectedIds.includes(u.id));
@@ -227,9 +265,11 @@ export const App: React.FC = () => {
     if (gameMode === 'ONLINE_MULTIPLAYER') {
       networkManager.disconnect();
     }
+    soundManager.stopBattleMusic();
     simulationRef.current.resetMatch();
     setPhase('MENU');
     setActiveDeployUnit(null);
+    setActiveUltimate(false);
     setSelectedUnits([]);
   };
 
@@ -271,20 +311,18 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* 4. TEKKEN-STYLE VERSUS BATTLE PREP SCREEN (3s COUNTDOWN) */}
+      {/* 4. TEKKEN VERSUS SCREEN (3s COUNTDOWN) */}
       {phase === 'BATTLE_PREP' && (
         <div className="fixed inset-0 bg-slate-950 flex flex-col items-center justify-center z-50 animate-in fade-in">
-          {/* Top VS Header */}
           <div className="text-center mb-6">
             <span className="text-amber-400 font-mono tracking-widest text-sm font-bold uppercase animate-pulse">
               GET READY FOR THE NEXT BATTLE
             </span>
             <h2 className="text-4xl md:text-6xl font-black font-mono tracking-wider uppercase text-white mt-1">
-              COMMANDER CLASH
+              CLAN WAR CLASH
             </h2>
           </div>
 
-          {/* Commander Versus Split Card */}
           <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8 items-center justify-center px-4">
             {/* P1 Commander */}
             <div className="bg-slate-900/90 border-2 border-cyan-400 p-6 rounded-3xl shadow-[0_0_35px_rgba(56,189,248,0.5)] flex items-center gap-4">
@@ -293,7 +331,7 @@ export const App: React.FC = () => {
               </div>
               <div>
                 <span className="text-xs font-mono font-bold text-cyan-400 uppercase tracking-widest">
-                  PLAYER 1 (BLUE HQ)
+                  IRON SYNDICATE
                 </span>
                 <h3 className="text-2xl font-black font-mono text-slate-100">{COMMANDER_P1.name}</h3>
                 <p className="text-xs text-slate-400 font-mono mt-1 font-semibold">{COMMANDER_P1.title}</p>
@@ -308,7 +346,7 @@ export const App: React.FC = () => {
               </div>
               <div>
                 <span className="text-xs font-mono font-bold text-rose-400 uppercase tracking-widest">
-                  PLAYER 2 (RED HQ)
+                  CRIMSON VANGUARD
                 </span>
                 <h3 className="text-2xl font-black font-mono text-slate-100">{COMMANDER_P2.name}</h3>
                 <p className="text-xs text-slate-400 font-mono mt-1 font-semibold">{COMMANDER_P2.title}</p>
@@ -317,7 +355,6 @@ export const App: React.FC = () => {
             </div>
           </div>
 
-          {/* Central 3-2-1 Countdown */}
           <div className="mt-8 flex flex-col items-center">
             <span className="text-8xl md:text-9xl font-black font-mono text-amber-400 animate-ping drop-shadow-[0_0_30px_rgba(245,158,11,1)]">
               {Math.max(1, Math.ceil(sim.phaseTimeRemaining))}
@@ -326,27 +363,37 @@ export const App: React.FC = () => {
         </div>
       )}
 
-      {/* 5. 100s ATTACK PHASE: REAL 3D VIEWPORT WITH OVERLAID TEKKEN HUD */}
+      {/* 5. 100s ATTACK PHASE: 3D VIEWPORT WITH OVERLAID TEKKEN HUD */}
       {(phase === 'ATTACK_PHASE' || phase === 'BATTLE_PREP') && (
         <div className="relative w-full h-full flex flex-col justify-between overflow-hidden">
-          {/* 3D WebGL Three.js Battlefield Canvas (Full Viewport) */}
+          {/* 3D WebGL Three.js Battlefield Canvas */}
           <div className="absolute inset-0 z-0">
             <GameCanvas3D
               simulation={sim}
               activeDeployUnit={activeDeployUnit}
+              activeUltimate={activeUltimate}
               onDeployUnit={handleDeployUnit}
+              onCastUltimate={handleCastUltimate}
               onSelectionChange={handleSelectionChange}
               playerRole={playerRole}
             />
           </div>
 
-          {/* Non-overlapping Overlaid Fighting HUD */}
+          {/* Overlaid Fighting HUD */}
           <div className="relative z-10 w-full h-full flex flex-col justify-between pointer-events-none">
             <BattleHUD
               simulation={sim}
               activeDeployUnit={activeDeployUnit}
+              activeUltimate={activeUltimate}
               selectedUnits={selectedUnits}
-              onSelectDeployUnit={setActiveDeployUnit}
+              onSelectDeployUnit={(u) => {
+                setActiveUltimate(false);
+                setActiveDeployUnit(u);
+              }}
+              onToggleUltimate={() => {
+                setActiveDeployUnit(null);
+                setActiveUltimate((prev) => !prev);
+              }}
               onMuteToggle={handleMuteToggle}
               isMuted={isMuted}
               onSurrender={handleReturnToMenu}

@@ -1,13 +1,15 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
 import { GameSimulation } from '../engine/gameSimulation';
-import { MAP_HEIGHT, MAP_WIDTH } from '../constants/gameConfig';
+import { MAP_HEIGHT, MAP_WIDTH, DEPLOYMENT_ZONES } from '../constants/gameConfig';
 import type { UnitClass, Vector2D } from '../types/game';
 
 interface GameCanvas3DProps {
   simulation: GameSimulation;
   activeDeployUnit: UnitClass | null;
+  activeUltimate: boolean;
   onDeployUnit: (unitClass: UnitClass, x: number, y: number) => void;
+  onCastUltimate: (x: number, y: number) => void;
   onSelectionChange: (selectedIds: string[]) => void;
   playerRole?: 'p1' | 'p2';
 }
@@ -15,13 +17,18 @@ interface GameCanvas3DProps {
 export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
   simulation,
   activeDeployUnit,
+  activeUltimate,
   onDeployUnit,
+  onCastUltimate,
   onSelectionChange,
   playerRole = 'p1',
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
 
-  // Drag marquee selection
+  const activeDeployUnitRef = useRef(activeDeployUnit);
+  activeDeployUnitRef.current = activeDeployUnit;
+
+  // Drag selection
   const isDraggingRef = useRef<boolean>(false);
   const dragStartRef = useRef<Vector2D>({ x: 0, y: 0 });
   const currentMouseRef = useRef<Vector2D>({ x: 0, y: 0 });
@@ -34,7 +41,7 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
   const raycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
   const mouseVecRef = useRef<THREE.Vector2>(new THREE.Vector2());
 
-  // Ground plane for raycasting
+  // Ground plane for raycast
   const groundPlaneRef = useRef<THREE.Mesh | null>(null);
 
   // Mesh registries for fast entity pooling
@@ -42,10 +49,11 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
   const structureMeshesRef = useRef<Map<string, THREE.Group>>(new Map());
   const projectileMeshesRef = useRef<Map<string, THREE.Mesh>>(new Map());
   const crateMeshesRef = useRef<Map<string, THREE.Group>>(new Map());
-  const fxMeshesRef = useRef<THREE.Group | null>(null);
-
-  // Tactical click feedback ripples in 3D
   const feedbackRipplesRef = useRef<{ mesh: THREE.Mesh; alpha: number; type: 'move' | 'attack' }[]>([]);
+
+  // 3D Orbital Beam Visual Mesh
+  const orbitalBeamRef = useRef<THREE.Mesh | null>(null);
+  const ghostMeshRef = useRef<THREE.Group | null>(null);
 
   // Convert 2D map coords (0..1600, 0..900) to 3D World coords
   const mapToWorld = (x: number, y: number): THREE.Vector3 => {
@@ -59,7 +67,6 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
     };
   };
 
-  // Raycast mouse to ground plane
   const getGroundIntersection = (clientX: number, clientY: number): Vector2D | null => {
     const mount = mountRef.current;
     const camera = cameraRef.current;
@@ -79,12 +86,17 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
     return null;
   };
 
-  // Mouse Handlers
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     const coords = getGroundIntersection(e.clientX, e.clientY);
     if (!coords) return;
 
     if (e.button === 0) {
+      if (activeUltimate) {
+        onCastUltimate(coords.x, coords.y);
+        triggerOrbitalBeamEffect(coords.x, coords.y);
+        return;
+      }
+
       if (activeDeployUnit) {
         onDeployUnit(activeDeployUnit, coords.x, coords.y);
         return;
@@ -128,7 +140,6 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
     if (selectedUnitIdsRef.current.length === 0) return;
     const opponentRole = playerRole === 'p1' ? 'p2' : 'p1';
 
-    // Target enemy unit
     const clickedEnemyUnit = simulation.units.find(
       (u) => u.owner === opponentRole && Math.hypot(u.x - coords.x, u.y - coords.y) <= u.radius + 18
     );
@@ -139,7 +150,6 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
       return;
     }
 
-    // Target enemy structure
     const clickedEnemyStruct = simulation.structures.find(
       (s) =>
         s.owner === opponentRole &&
@@ -154,7 +164,6 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
       return;
     }
 
-    // Ground move
     simulation.orderUnitsMove(selectedUnitIdsRef.current, coords.x, coords.y);
     add3DFeedback(coords.x, coords.y, 'move');
   };
@@ -170,17 +179,49 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
       color,
       side: THREE.DoubleSide,
       transparent: true,
-      opacity: 0.9,
+      opacity: 0.95,
     });
     const mesh = new THREE.Mesh(geom, mat);
     const worldPos = mapToWorld(x, y);
     mesh.position.set(worldPos.x, 1, worldPos.z);
     scene.add(mesh);
 
-    feedbackRipplesRef.current.push({ mesh, alpha: 0.9, type });
+    feedbackRipplesRef.current.push({ mesh, alpha: 0.95, type });
   };
 
-  // Initialize Three.js Scene, Camera, Lights, and Terrain
+  const triggerOrbitalBeamEffect = (x: number, y: number) => {
+    const scene = sceneRef.current;
+    if (!scene) return;
+
+    const worldPos = mapToWorld(x, y);
+    const beamGeom = new THREE.CylinderGeometry(24, 28, 1200, 24);
+    const beamMat = new THREE.MeshBasicMaterial({
+      color: playerRole === 'p1' ? 0x38bdf8 : 0xef4444,
+      transparent: true,
+      opacity: 0.85,
+    });
+    const beam = new THREE.Mesh(beamGeom, beamMat);
+    beam.position.set(worldPos.x, 600, worldPos.z);
+    scene.add(beam);
+    orbitalBeamRef.current = beam;
+
+    // Fade out beam
+    let beamAlpha = 0.85;
+    const fadeTimer = setInterval(() => {
+      beamAlpha -= 0.1;
+      if (beamAlpha <= 0) {
+        clearInterval(fadeTimer);
+        scene.remove(beam);
+        orbitalBeamRef.current = null;
+      } else {
+        beamMat.opacity = beamAlpha;
+        beam.scale.x *= 1.05;
+        beam.scale.z *= 1.05;
+      }
+    }, 40);
+  };
+
+  // INITIALIZE 3D SCENE
   useEffect(() => {
     const mount = mountRef.current;
     if (!mount) return;
@@ -190,11 +231,11 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
 
     // 1. Scene
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(0x060913);
-    scene.fog = new THREE.FogExp2(0x060913, 0.0006);
+    scene.background = new THREE.Color(0x070b14);
+    scene.fog = new THREE.FogExp2(0x070b14, 0.00055);
     sceneRef.current = scene;
 
-    // 2. Camera: Isometric 3D Angle looking at battlefield center
+    // 2. Camera: Angled 3D Isometric View
     const camera = new THREE.PerspectiveCamera(46, width / height, 10, 4000);
     camera.position.set(0, 920, 720);
     camera.lookAt(0, -20, 0);
@@ -209,17 +250,17 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
     rendererRef.current = renderer;
     mount.appendChild(renderer.domElement);
 
-    // 4. Lighting
-    const ambientLight = new THREE.AmbientLight(0x384158, 1.4);
+    // 4. Lights
+    const ambientLight = new THREE.AmbientLight(0x475569, 1.5);
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(0xffffff, 2.0);
-    sunLight.position.set(200, 1000, 400);
+    const sunLight = new THREE.DirectionalLight(0xffffff, 2.2);
+    sunLight.position.set(200, 1100, 450);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 2048;
     sunLight.shadow.mapSize.height = 2048;
     sunLight.shadow.camera.near = 200;
-    sunLight.shadow.camera.far = 2500;
+    sunLight.shadow.camera.far = 2600;
     const d = 1000;
     sunLight.shadow.camera.left = -d;
     sunLight.shadow.camera.right = d;
@@ -227,58 +268,97 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
     sunLight.shadow.camera.bottom = -d;
     scene.add(sunLight);
 
-    // Base Neon Pointlights
-    const p1Light = new THREE.PointLight(0x0284c7, 3.5, 900);
-    p1Light.position.set(-650, 120, 0);
+    const p1Light = new THREE.PointLight(0x0284c7, 4.0, 950);
+    p1Light.position.set(-650, 140, 0);
     scene.add(p1Light);
 
-    const p2Light = new THREE.PointLight(0xdc2626, 3.5, 900);
-    p2Light.position.set(650, 120, 0);
+    const p2Light = new THREE.PointLight(0xdc2626, 4.0, 950);
+    p2Light.position.set(650, 140, 0);
     scene.add(p2Light);
 
-    // 5. Ground Plane (Metal Plating)
+    // 5. 3D Metal Battleground Floor
     const groundGeom = new THREE.PlaneGeometry(MAP_WIDTH, MAP_HEIGHT, 32, 18);
     groundGeom.rotateX(-Math.PI / 2);
     const groundMat = new THREE.MeshStandardMaterial({
       color: 0x0f172a,
-      roughness: 0.7,
-      metalness: 0.35,
+      roughness: 0.65,
+      metalness: 0.4,
     });
     const ground = new THREE.Mesh(groundGeom, groundMat);
     ground.receiveShadow = true;
     scene.add(ground);
     groundPlaneRef.current = ground;
 
-    // Grid Floor Overlay
-    const gridHelper = new THREE.GridHelper(MAP_WIDTH, 32, 0x0284c7, 0x1e293b);
-    gridHelper.position.y = 0.5;
-    scene.add(gridHelper);
+    // Glowing Lane Ground Strips
+    const laneMat = new THREE.MeshBasicMaterial({ color: 0x1e293b });
+    const topLane = new THREE.Mesh(new THREE.PlaneGeometry(MAP_WIDTH - 200, 20), laneMat);
+    topLane.rotateX(-Math.PI / 2);
+    topLane.position.set(0, 0.4, -200);
+    scene.add(topLane);
 
-    // Arena Perimeter Wall
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.6, roughness: 0.4 });
-    const wallGeomTop = new THREE.BoxGeometry(MAP_WIDTH + 40, 30, 20);
-    const wallTop = new THREE.Mesh(wallGeomTop, wallMat);
-    wallTop.position.set(0, 15, -MAP_HEIGHT / 2 - 10);
-    wallTop.castShadow = true;
-    scene.add(wallTop);
+    const midLane = new THREE.Mesh(new THREE.PlaneGeometry(MAP_WIDTH - 200, 30), new THREE.MeshBasicMaterial({ color: 0x172554 }));
+    midLane.rotateX(-Math.PI / 2);
+    midLane.position.set(0, 0.4, 0);
+    scene.add(midLane);
 
-    const wallBottom = new THREE.Mesh(wallGeomTop, wallMat);
-    wallBottom.position.set(0, 15, MAP_HEIGHT / 2 + 10);
-    wallBottom.castShadow = true;
-    scene.add(wallBottom);
+    const botLane = new THREE.Mesh(new THREE.PlaneGeometry(MAP_WIDTH - 200, 20), laneMat);
+    botLane.rotateX(-Math.PI / 2);
+    botLane.position.set(0, 0.4, 200);
+    scene.add(botLane);
 
-    // Tactical FX Group
-    const fxGroup = new THREE.Group();
-    scene.add(fxGroup);
-    fxMeshesRef.current = fxGroup;
+    // Perimeter Laser Fences
+    const fenceMat = new THREE.MeshBasicMaterial({ color: 0x0284c7, transparent: true, opacity: 0.5 });
+    const f1 = new THREE.Mesh(new THREE.BoxGeometry(MAP_WIDTH, 14, 4), fenceMat);
+    f1.position.set(0, 7, -MAP_HEIGHT / 2);
+    scene.add(f1);
 
-    // Build 3D Crates, Barrels & Props
+    const f2 = new THREE.Mesh(new THREE.BoxGeometry(MAP_WIDTH, 14, 4), fenceMat);
+    f2.position.set(0, 7, MAP_HEIGHT / 2);
+    scene.add(f2);
+
+    // Holographic Deployment Zones (Ground Hologrid)
+    const p1ZoneGeom = new THREE.PlaneGeometry(350, 700);
+    p1ZoneGeom.rotateX(-Math.PI / 2);
+    const p1ZoneMat = new THREE.MeshBasicMaterial({ color: 0x0284c7, transparent: true, opacity: 0.14 });
+    const p1ZoneMesh = new THREE.Mesh(p1ZoneGeom, p1ZoneMat);
+    p1ZoneMesh.position.set(-575, 0.2, 0);
+    scene.add(p1ZoneMesh);
+
+    const p2ZoneGeom = new THREE.PlaneGeometry(350, 700);
+    p2ZoneGeom.rotateX(-Math.PI / 2);
+    const p2ZoneMat = new THREE.MeshBasicMaterial({ color: 0xdc2626, transparent: true, opacity: 0.14 });
+    const p2ZoneMesh = new THREE.Mesh(p2ZoneGeom, p2ZoneMat);
+    p2ZoneMesh.position.set(575, 0.2, 0);
+    scene.add(p2ZoneMesh);
+
+    // Interactive 3D Holographic Ghost Preview
+    const ghostGroup = new THREE.Group();
+    ghostGroup.visible = false;
+    scene.add(ghostGroup);
+    ghostMeshRef.current = ghostGroup;
+
+    const ghostRingGeom = new THREE.RingGeometry(16, 22, 32);
+    ghostRingGeom.rotateX(-Math.PI / 2);
+    const ghostRingMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.85, side: THREE.DoubleSide });
+    const ghostRing = new THREE.Mesh(ghostRingGeom, ghostRingMat);
+    ghostRing.name = 'ghostRing';
+    ghostRing.position.y = 1;
+    ghostGroup.add(ghostRing);
+
+    const ghostBeamGeom = new THREE.CylinderGeometry(14, 20, 90, 16, 1, true);
+    const ghostBeamMat = new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.28, side: THREE.DoubleSide });
+    const ghostBeam = new THREE.Mesh(ghostBeamGeom, ghostBeamMat);
+    ghostBeam.name = 'ghostBeam';
+    ghostBeam.position.y = 45;
+    ghostGroup.add(ghostBeam);
+
+    // Build 3D Crates & Barrels
     build3DCrates(scene, simulation, crateMeshesRef);
 
-    // Build 3D Structures
+    // Build 3D Symmetrical Base Structures
     build3DStructures(scene, simulation, structureMeshesRef);
 
-    // Resize handler
+    // Resize Handler
     const handleResize = () => {
       if (!mount || !renderer || !camera) return;
       const w = mount.clientWidth;
@@ -289,7 +369,7 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
     };
     window.addEventListener('resize', handleResize);
 
-    // 60 FPS Render Loop
+    // 60 FPS RENDER LOOP
     let animId: number;
     let tick = 0;
 
@@ -302,17 +382,44 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
       const shakeOffsetZ = (Math.random() - 0.5) * trauma * 2.5;
       camera.position.set(shakeOffsetX, 920 + (Math.random() - 0.5) * trauma, 720 + shakeOffsetZ);
 
-      // 1. Update 3D Structures (rotations, healing waves, turrets)
+      // 1. Structures Animation (HQ radar, healing cross, turrets)
       update3DStructures(structureMeshesRef, simulation, tick);
 
-      // 2. Update 3D Units (smooth translation, rotation, animations)
-      update3DUnits(scene, unitMeshesRef, simulation, tick, playerRole);
+      // 2. Units Walking Limb Animation & Head tracking
+      update3DArticulatedUnits(scene, unitMeshesRef, simulation, tick);
 
-      // 3. Update 3D Projectiles
+      // 3. Projectiles & Arcing Mortar Shells
       update3DProjectiles(scene, projectileMeshesRef, simulation);
 
-      // 4. Update 3D Click Ripples
+      // 4. Click Ripples
       update3DClickRipples(scene, feedbackRipplesRef);
+
+      // 5. Interactive Ghost Preview Update
+      if (ghostGroup) {
+        const curUnit = activeDeployUnitRef.current;
+        if (curUnit && currentMouseRef.current) {
+          ghostGroup.visible = true;
+          const coords = currentMouseRef.current;
+          const zone = DEPLOYMENT_ZONES[playerRole];
+          const isValid = coords.x >= zone.minX && coords.x <= zone.maxX && coords.y >= zone.minY && coords.y <= zone.maxY;
+          const worldPos = mapToWorld(coords.x, coords.y);
+          ghostGroup.position.set(worldPos.x, 0, worldPos.z);
+
+          const ringMesh = ghostGroup.getObjectByName('ghostRing') as THREE.Mesh;
+          const beamMesh = ghostGroup.getObjectByName('ghostBeam') as THREE.Mesh;
+          const ghostColor = isValid ? (playerRole === 'p1' ? 0x38bdf8 : 0xf87171) : 0xf59e0b;
+          if (ringMesh) {
+            (ringMesh.material as THREE.MeshBasicMaterial).color.setHex(ghostColor);
+            ringMesh.rotation.y = tick * 0.05;
+          }
+          if (beamMesh) {
+            (beamMesh.material as THREE.MeshBasicMaterial).color.setHex(ghostColor);
+            (beamMesh.material as THREE.MeshBasicMaterial).opacity = 0.22 + Math.sin(tick * 0.15) * 0.1;
+          }
+        } else {
+          ghostGroup.visible = false;
+        }
+      }
 
       renderer.render(scene, camera);
       animId = requestAnimationFrame(render3D);
@@ -333,13 +440,13 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
   return (
     <div
       ref={mountRef}
-      className="relative w-full aspect-[16/9] max-h-[86vh] mx-auto rounded-3xl overflow-hidden border-2 border-slate-800 shadow-[0_0_60px_rgba(0,0,0,0.95)] bg-black select-none cursor-crosshair"
+      className="relative w-full h-full select-none cursor-crosshair overflow-hidden"
       onMouseDown={handleMouseDown}
       onMouseMove={handleMouseMove}
       onMouseUp={handleMouseUp}
       onContextMenu={(e) => e.preventDefault()}
     >
-      {/* Tactical 3D HUD Overlay: Marquee Drag Box */}
+      {/* 3D Drag Marquee Selection Box */}
       {isDraggingRef.current && (
         <div
           className="absolute border-2 border-cyan-400 bg-cyan-400/20 pointer-events-none rounded-md"
@@ -352,17 +459,353 @@ export const GameCanvas3D: React.FC<GameCanvas3DProps> = ({
         />
       )}
 
-      {/* Ghost Deployment Guide */}
-      {activeDeployUnit && (
-        <div className="absolute top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-cyan-950/90 border border-cyan-400 text-cyan-300 font-mono text-xs tracking-wider uppercase shadow-xl animate-pulse pointer-events-none">
-          Click Inside Friendly {playerRole === 'p1' ? 'Blue' : 'Red'} Base to Deploy {activeDeployUnit.toUpperCase()}
+      {/* Ultimate Strike Cursor Notification */}
+      {activeUltimate && (
+        <div className="absolute top-6 left-1/2 -translate-x-1/2 px-6 py-2 rounded-full bg-rose-950/95 border-2 border-rose-500 text-rose-300 font-mono text-xs font-black tracking-widest uppercase shadow-[0_0_25px_rgba(239,68,68,0.8)] animate-pulse pointer-events-none">
+          ⚡ TARGET FIELD TO CALL DOWN ULTIMATE STRIKE!
         </div>
       )}
+
+      {/* Floating Combat Damage Numbers */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden">
+        {simulation.floatingTexts.map((txt) => {
+          const mount = mountRef.current;
+          if (!mount || !cameraRef.current) return null;
+          const pos = new THREE.Vector3(txt.x - MAP_WIDTH / 2, 28, txt.y - MAP_HEIGHT / 2);
+          pos.project(cameraRef.current);
+          const screenX = ((pos.x + 1) * mount.clientWidth) / 2;
+          const screenY = ((-pos.y + 1) * mount.clientHeight) / 2;
+
+          return (
+            <div
+              key={txt.id}
+              className="absolute font-mono font-black text-xs md:text-sm drop-shadow-[0_2px_4px_rgba(0,0,0,0.9)] transform -translate-x-1/2 -translate-y-1/2 pointer-events-none"
+              style={{
+                left: `${screenX}px`,
+                top: `${screenY}px`,
+                color: txt.color,
+                opacity: Math.max(0, Math.min(1, txt.life / txt.maxLife)),
+                transform: `scale(${1 + (1 - txt.life / txt.maxLife) * 0.3})`,
+              }}
+            >
+              {txt.text}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 };
 
-// ================= 3D BUILDERS & UPDATERS =================
+// ================= ARTICULATED 3D CHARACTER SYSTEM =================
+
+function build3DUnitMesh(unit: any): THREE.Group {
+  const group = new THREE.Group();
+  const isP1 = unit.owner === 'p1';
+  const mainColor = isP1 ? 0x0ea5e9 : 0xef4444;
+  const accentColor = isP1 ? 0x38bdf8 : 0xf87171;
+
+  // 1. Selection Torus on Ground
+  const selGeom = new THREE.TorusGeometry(unit.radius + 6, 1.5, 8, 24);
+  selGeom.rotateX(Math.PI / 2);
+  const selMat = new THREE.MeshBasicMaterial({ color: isP1 ? 0x38bdf8 : 0xf87171 });
+  const selRing = new THREE.Mesh(selGeom, selMat);
+  selRing.name = 'selectionRing';
+  selRing.position.y = 1;
+  selRing.visible = false;
+  group.add(selRing);
+
+  // 2. Overhead 3D Health Bar Billboard
+  const hpBar = new THREE.Group();
+  hpBar.name = 'healthBar';
+  const barY = unit.classType === 'heavy' ? 44 : unit.classType === 'siege' ? 36 : 30;
+  hpBar.position.set(0, barY, 0);
+  hpBar.rotation.x = -Math.PI / 4;
+
+  const hpBg = new THREE.Mesh(
+    new THREE.PlaneGeometry(24, 3.2),
+    new THREE.MeshBasicMaterial({ color: 0x090d16, side: THREE.DoubleSide })
+  );
+  hpBar.add(hpBg);
+
+  const hpFill = new THREE.Mesh(
+    new THREE.PlaneGeometry(22, 2.2),
+    new THREE.MeshBasicMaterial({ color: isP1 ? 0x22c55e : 0xf87171, side: THREE.DoubleSide })
+  );
+  hpFill.name = 'hpFill';
+  hpFill.position.z = 0.1;
+  hpBar.add(hpFill);
+  group.add(hpBar);
+
+  // 3. Character Body & Limbs
+  if (unit.classType === 'scout') {
+    // CYBER-RONIN: Humanoid Cyber Ninja with Hover Skates & Twin Vibro-Katanas
+    const torsoGeom = new THREE.BoxGeometry(10, 14, 8);
+    const torsoMat = new THREE.MeshStandardMaterial({ color: mainColor, roughness: 0.3, metalness: 0.8 });
+    const torso = new THREE.Mesh(torsoGeom, torsoMat);
+    torso.position.y = 18;
+    torso.castShadow = true;
+    group.add(torso);
+
+    // Cyber Helm & Visor
+    const headGeom = new THREE.SphereGeometry(4.5, 12, 12);
+    const headMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.9 });
+    const head = new THREE.Mesh(headGeom, headMat);
+    head.position.y = 27;
+    group.add(head);
+
+    const visorGeom = new THREE.BoxGeometry(7, 2, 3);
+    const visorMat = new THREE.MeshBasicMaterial({ color: accentColor });
+    const visor = new THREE.Mesh(visorGeom, visorMat);
+    visor.position.set(0, 27, 3);
+    group.add(visor);
+
+    // Twin Vibro-Katanas
+    const bladeGeom = new THREE.BoxGeometry(1.5, 24, 2);
+    const bladeMat = new THREE.MeshBasicMaterial({ color: accentColor });
+    const blade1 = new THREE.Mesh(bladeGeom, bladeMat);
+    blade1.position.set(-8, 16, 6);
+    blade1.rotateZ(-Math.PI / 6);
+    const blade2 = new THREE.Mesh(bladeGeom, bladeMat);
+    blade2.position.set(8, 16, 6);
+    blade2.rotateZ(Math.PI / 6);
+    group.add(blade1);
+    group.add(blade2);
+
+    // Hover skate thrusters
+    const skateGeom = new THREE.BoxGeometry(4, 3, 10);
+    const skateMat = new THREE.MeshBasicMaterial({ color: accentColor });
+    const s1 = new THREE.Mesh(skateGeom, skateMat);
+    s1.position.set(-4, 5, 0);
+    const s2 = new THREE.Mesh(skateGeom, skateMat);
+    s2.position.set(4, 5, 0);
+    group.add(s1);
+    group.add(s2);
+  } else if (unit.classType === 'guardian') {
+    // AEGIS PALADIN: Towering Armored Paladin with Riot Shield & Seismic Hammer
+    const torsoGeom = new THREE.BoxGeometry(16, 18, 12);
+    const torsoMat = new THREE.MeshStandardMaterial({ color: mainColor, metalness: 0.6 });
+    const torso = new THREE.Mesh(torsoGeom, torsoMat);
+    torso.position.y = 20;
+    torso.castShadow = true;
+    group.add(torso);
+
+    // Horned Helm
+    const headGeom = new THREE.BoxGeometry(8, 8, 8);
+    const headMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.8 });
+    const head = new THREE.Mesh(headGeom, headMat);
+    head.position.y = 31;
+    group.add(head);
+
+    // Giant Tower Shield in Left Arm
+    const shieldGeom = new THREE.BoxGeometry(4, 30, 20);
+    const shieldMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, metalness: 0.8 });
+    const shield = new THREE.Mesh(shieldGeom, shieldMat);
+    shield.position.set(-14, 18, 6);
+    group.add(shield);
+
+    // Seismic Hammer in Right Arm
+    const hammerShaft = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 26), new THREE.MeshStandardMaterial({ color: 0x475569 }));
+    const hammerHead = new THREE.Mesh(new THREE.BoxGeometry(8, 8, 12), new THREE.MeshStandardMaterial({ color: accentColor, metalness: 0.9 }));
+    hammerShaft.position.set(13, 20, 4);
+    hammerHead.position.set(13, 31, 4);
+    group.add(hammerShaft);
+    group.add(hammerHead);
+
+    // Translucent Hexagonal Forcefield Bubble
+    const ffGeom = new THREE.SphereGeometry(unit.radius + 10, 16, 16);
+    const ffMat = new THREE.MeshBasicMaterial({
+      color: 0x38bdf8,
+      transparent: true,
+      opacity: 0.35,
+      wireframe: true,
+    });
+    const ff = new THREE.Mesh(ffGeom, ffMat);
+    ff.name = 'forcefield';
+    ff.position.y = 20;
+    group.add(ff);
+  } else if (unit.classType === 'heavy') {
+    // DREADNOUGHT TITAN: 10-Ton Articulated Bipedal War Mech with Dual Rotary Cannons
+    const chassisGeom = new THREE.BoxGeometry(26, 22, 22);
+    const chassisMat = new THREE.MeshStandardMaterial({ color: isP1 ? 0x0369a1 : 0x7f1d1d, metalness: 0.7 });
+    const chassis = new THREE.Mesh(chassisGeom, chassisMat);
+    chassis.position.y = 26;
+    chassis.castShadow = true;
+    group.add(chassis);
+
+    // Dual Heavy Gatling Cannons
+    const barrelGeom = new THREE.CylinderGeometry(4, 4, 34, 8);
+    barrelGeom.rotateX(Math.PI / 2);
+    const barrelMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.9 });
+    const g1 = new THREE.Mesh(barrelGeom, barrelMat);
+    g1.position.set(-16, 26, 14);
+    const g2 = new THREE.Mesh(barrelGeom, barrelMat);
+    g2.position.set(16, 26, 14);
+    group.add(g1);
+    group.add(g2);
+
+    // Articulated Hydraulic Legs
+    const legGeom = new THREE.BoxGeometry(6, 20, 8);
+    const legMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.8 });
+    const legL = new THREE.Mesh(legGeom, legMat);
+    legL.name = 'legL';
+    legL.position.set(-10, 10, 0);
+    const legR = new THREE.Mesh(legGeom, legMat);
+    legR.name = 'legR';
+    legR.position.set(10, 10, 0);
+    group.add(legL);
+    group.add(legR);
+  } else if (unit.classType === 'siege') {
+    // CATACLYSM MORTAR: Quad-Pedal Heavy Siege Artillery Platform
+    const baseGeom = new THREE.CylinderGeometry(unit.radius, unit.radius + 6, 14, 6);
+    const baseMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.7 });
+    const base = new THREE.Mesh(baseGeom, baseMat);
+    base.position.y = 10;
+    group.add(base);
+
+    // Giant Angled Mortar Tube
+    const mortarGroup = new THREE.Group();
+    mortarGroup.name = 'mortarCannon';
+    const mortarGeom = new THREE.CylinderGeometry(7, 9, 32, 12);
+    mortarGeom.rotateX(Math.PI / 4);
+    const mortarMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.8 });
+    const mortar = new THREE.Mesh(mortarGeom, mortarMat);
+    mortar.position.set(0, 16, 4);
+    mortarGroup.add(mortar);
+    group.add(mortarGroup);
+  } else if (unit.classType === 'ranger') {
+    // PHANTOM SNIPER: Sleek Marksman with Long Railgun & Real Laser Sight
+    const torsoGeom = new THREE.CylinderGeometry(6, 7, 20, 8);
+    const torsoMat = new THREE.MeshStandardMaterial({ color: mainColor, metalness: 0.5 });
+    const torso = new THREE.Mesh(torsoGeom, torsoMat);
+    torso.position.y = 16;
+    torso.castShadow = true;
+    group.add(torso);
+
+    // Sniper Rifle
+    const rifleGeom = new THREE.CylinderGeometry(2, 2.5, 36, 8);
+    rifleGeom.rotateX(Math.PI / 2);
+    const rifleMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.9 });
+    const rifle = new THREE.Mesh(rifleGeom, rifleMat);
+    rifle.position.set(4, 18, 16);
+    group.add(rifle);
+
+    // Real 3D Laser Targeting Line
+    const laserMat = new THREE.LineBasicMaterial({ color: isP1 ? 0x38bdf8 : 0xef4444 });
+    const points = [new THREE.Vector3(4, 18, 34), new THREE.Vector3(4, 18, 260)];
+    const laserGeom = new THREE.BufferGeometry().setFromPoints(points);
+    const laserLine = new THREE.Line(laserGeom, laserMat);
+    group.add(laserLine);
+  } else {
+    // VANGUARD COMMANDO: Frontline Combat Trooper with Dual Plasma Assault SMGs
+    const torsoGeom = new THREE.BoxGeometry(12, 16, 9);
+    const torsoMat = new THREE.MeshStandardMaterial({ color: mainColor, metalness: 0.5 });
+    const torso = new THREE.Mesh(torsoGeom, torsoMat);
+    torso.position.y = 16;
+    torso.castShadow = true;
+    group.add(torso);
+
+    // Dual SMGs
+    const smgGeom = new THREE.BoxGeometry(3, 5, 14);
+    const smgMat = new THREE.MeshStandardMaterial({ color: accentColor, metalness: 0.8 });
+    const smg1 = new THREE.Mesh(smgGeom, smgMat);
+    smg1.position.set(-8, 16, 10);
+    const smg2 = new THREE.Mesh(smgGeom, smgMat);
+    smg2.position.set(8, 16, 10);
+    group.add(smg1);
+    group.add(smg2);
+  }
+
+  return group;
+}
+
+function update3DArticulatedUnits(
+  scene: THREE.Scene,
+  unitMapRef: React.MutableRefObject<Map<string, THREE.Group>>,
+  sim: GameSimulation,
+  tick: number
+) {
+  const currentIds = new Set(sim.units.map((u) => u.id));
+
+  unitMapRef.current.forEach((group, id) => {
+    if (!currentIds.has(id)) {
+      scene.remove(group);
+      unitMapRef.current.delete(id);
+    }
+  });
+
+  sim.units.forEach((u) => {
+    let group = unitMapRef.current.get(u.id);
+
+    if (!group) {
+      group = build3DUnitMesh(u);
+      scene.add(group);
+      unitMapRef.current.set(u.id, group);
+    }
+
+    const worldPos = new THREE.Vector3(u.x - MAP_WIDTH / 2, 0, u.y - MAP_HEIGHT / 2);
+    group.position.lerp(worldPos, 0.45);
+
+    // Hover effect for Cyber-Ronin
+    if (u.classType === 'scout') {
+      group.position.y = 6 + Math.sin(tick * 0.18 + u.radius) * 3;
+    } else {
+      group.position.y = 0;
+    }
+
+    // Facing Angle
+    group.rotation.y = -u.facingAngle + Math.PI / 2;
+
+    // Selection ring
+    const selRing = group.getObjectByName('selectionRing');
+    if (selRing) {
+      selRing.visible = !!u.selected;
+    }
+
+    // Overhead 3D Health Bar Billboard
+    const hpBar = group.getObjectByName('healthBar');
+    if (hpBar) {
+      const hpRatio = Math.max(0, Math.min(1, u.hp / u.maxHp));
+      const hpFill = hpBar.getObjectByName('hpFill') as THREE.Mesh;
+      if (hpFill) {
+        hpFill.scale.x = hpRatio;
+        hpFill.position.x = -11 + (22 * hpRatio) / 2;
+        const fillMat = hpFill.material as THREE.MeshBasicMaterial;
+        if (hpRatio < 0.25) fillMat.color.setHex(0xef4444);
+        else if (hpRatio < 0.55) fillMat.color.setHex(0xf59e0b);
+        else fillMat.color.setHex(u.owner === 'p1' ? 0x22c55e : 0xf87171);
+      }
+    }
+
+    // Forcefield pulse
+    const ff = group.getObjectByName('forcefield');
+    if (ff) {
+      const s = 1 + Math.sin(tick * 0.12) * 0.08;
+      ff.scale.set(s, s, s);
+    }
+
+    // Walking leg articulation for Dreadnought Titan
+    const legL = group.getObjectByName('legL');
+    const legR = group.getObjectByName('legR');
+    if (legL && legR) {
+      if (u.state === 'moving') {
+        const stride = Math.sin(tick * 0.3) * 0.4;
+        legL.rotation.x = stride;
+        legR.rotation.x = -stride;
+      } else {
+        legL.rotation.x = 0;
+        legR.rotation.x = 0;
+      }
+    }
+
+    // Mortar recoil
+    const mortar = group.getObjectByName('mortarCannon');
+    if (mortar && u.state === 'attacking') {
+      const kick = Math.abs(Math.sin(tick * 0.5)) * 4;
+      mortar.position.z = -kick;
+    }
+  });
+}
 
 function build3DCrates(
   scene: THREE.Scene,
@@ -375,27 +818,20 @@ function build3DCrates(
     const worldZ = crate.y - MAP_HEIGHT / 2;
 
     if (crate.type === 'cargo_crate') {
-      // 3D Shipping Container
-      const geom = new THREE.BoxGeometry(crate.width, 32, crate.height);
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0x334155,
-        roughness: 0.5,
-        metalness: 0.6,
-      });
+      const geom = new THREE.BoxGeometry(crate.width, 34, crate.height);
+      const mat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.5, metalness: 0.6 });
       const mesh = new THREE.Mesh(geom, mat);
-      mesh.position.y = 16;
+      mesh.position.y = 17;
       mesh.castShadow = true;
       mesh.receiveShadow = true;
       group.add(mesh);
 
-      // Yellow hazard stripes
       const stripeGeom = new THREE.BoxGeometry(crate.width + 1, 6, crate.height + 1);
       const stripeMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.4 });
       const stripe = new THREE.Mesh(stripeGeom, stripeMat);
-      stripe.position.y = 16;
+      stripe.position.y = 17;
       group.add(stripe);
     } else if (crate.type === 'ammo_crate') {
-      // 3D Munitions Box
       const geom = new THREE.BoxGeometry(crate.width, 18, crate.height);
       const mat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.7, roughness: 0.3 });
       const mesh = new THREE.Mesh(geom, mat);
@@ -403,19 +839,13 @@ function build3DCrates(
       mesh.castShadow = true;
       group.add(mesh);
     } else if (crate.type === 'explosive_barrel') {
-      // 3D High-Hazard Fuel Drum
       const geom = new THREE.CylinderGeometry(crate.width / 2, crate.width / 2, 28, 16);
-      const mat = new THREE.MeshStandardMaterial({
-        color: 0xb45309,
-        emissive: 0x78350f,
-        roughness: 0.4,
-      });
+      const mat = new THREE.MeshStandardMaterial({ color: 0xb45309, emissive: 0x78350f, roughness: 0.4 });
       const mesh = new THREE.Mesh(geom, mat);
       mesh.position.y = 14;
       mesh.castShadow = true;
       group.add(mesh);
 
-      // Glowing hazard band
       const ringGeom = new THREE.TorusGeometry(crate.width / 2 + 0.5, 1.5, 8, 16);
       ringGeom.rotateX(Math.PI / 2);
       const ringMat = new THREE.MeshBasicMaterial({ color: 0xf59e0b });
@@ -423,7 +853,6 @@ function build3DCrates(
       ring.position.y = 14;
       group.add(ring);
     } else {
-      // 3D Concrete Barrier
       const geom = new THREE.BoxGeometry(crate.width, 24, crate.height);
       const mat = new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.8 });
       const mesh = new THREE.Mesh(geom, mat);
@@ -453,102 +882,119 @@ function build3DStructures(
     const worldZ = s.y - MAP_HEIGHT / 2;
 
     if (s.type === 'hq') {
-      // 3D Multi-Tier Fortress HQ
-      const baseGeom = new THREE.BoxGeometry(s.width, 38, s.height);
+      const baseGeom = new THREE.BoxGeometry(s.width, 42, s.height);
       const baseMat = new THREE.MeshStandardMaterial({ color: mainColor, roughness: 0.4, metalness: 0.6 });
       const baseMesh = new THREE.Mesh(baseGeom, baseMat);
-      baseMesh.position.y = 19;
+      baseMesh.position.y = 21;
       baseMesh.castShadow = true;
       baseMesh.receiveShadow = true;
       group.add(baseMesh);
 
-      // Command deck dome
-      const domeGeom = new THREE.SphereGeometry(26, 20, 16, 0, Math.PI * 2, 0, Math.PI / 2);
+      const domeGeom = new THREE.SphereGeometry(28, 20, 16, 0, Math.PI * 2, 0, Math.PI / 2);
       const domeMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.2, metalness: 0.8 });
       const domeMesh = new THREE.Mesh(domeGeom, domeMat);
-      domeMesh.position.y = 38;
+      domeMesh.position.y = 42;
       group.add(domeMesh);
 
-      // Rotating radar dish
       const dishGroup = new THREE.Group();
       dishGroup.name = 'radarDish';
-      const dishGeom = new THREE.CylinderGeometry(14, 2, 6, 16);
+      const dishGeom = new THREE.CylinderGeometry(15, 2, 6, 16);
       dishGeom.rotateZ(Math.PI / 3);
       const dishMat = new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.3 });
       const dish = new THREE.Mesh(dishGeom, dishMat);
-      dishGroup.position.set(0, 64, 0);
+      dishGroup.position.set(0, 68, 0);
       dishGroup.add(dish);
       group.add(dishGroup);
+
+      // HQ Health Bar Billboard
+      const hqHpBar = new THREE.Group();
+      hqHpBar.name = 'structHpBar';
+      hqHpBar.userData = { width: 50 };
+      hqHpBar.position.set(0, 84, 0);
+      hqHpBar.rotation.x = -Math.PI / 4;
+      const hqHpBg = new THREE.Mesh(new THREE.PlaneGeometry(52, 5.5), new THREE.MeshBasicMaterial({ color: 0x090d16, side: THREE.DoubleSide }));
+      const hqHpFill = new THREE.Mesh(new THREE.PlaneGeometry(50, 4), new THREE.MeshBasicMaterial({ color: isP1 ? 0x38bdf8 : 0xef4444, side: THREE.DoubleSide }));
+      hqHpFill.name = 'hpFill';
+      hqHpFill.position.z = 0.1;
+      hqHpBar.add(hqHpBg);
+      hqHpBar.add(hqHpFill);
+      group.add(hqHpBar);
     } else if (s.type === 'tower') {
-      // 3D Dual-Railgun Sentry Tower
-      const baseGeom = new THREE.CylinderGeometry(18, 24, 42, 8);
+      const baseGeom = new THREE.CylinderGeometry(18, 24, 44, 8);
       const baseMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.6, roughness: 0.4 });
       const baseMesh = new THREE.Mesh(baseGeom, baseMat);
-      baseMesh.position.y = 21;
+      baseMesh.position.y = 22;
       baseMesh.castShadow = true;
       group.add(baseMesh);
 
-      // Swivel Turret Head
       const headGroup = new THREE.Group();
       headGroup.name = 'turretHead';
-      headGroup.position.y = 44;
+      headGroup.position.y = 46;
 
       const headGeom = new THREE.SphereGeometry(14, 16, 16);
       const headMat = new THREE.MeshStandardMaterial({ color: mainColor, metalness: 0.5 });
       const headMesh = new THREE.Mesh(headGeom, headMat);
       headGroup.add(headMesh);
 
-      // Dual railgun barrels
-      const barrelGeom = new THREE.CylinderGeometry(2.5, 2.5, 28, 8);
+      const barrelGeom = new THREE.CylinderGeometry(2.5, 2.5, 30, 8);
       barrelGeom.rotateX(Math.PI / 2);
       const barrelMat = new THREE.MeshStandardMaterial({ color: accentColor, metalness: 0.8 });
       const b1 = new THREE.Mesh(barrelGeom, barrelMat);
-      b1.position.set(-5, 0, 14);
+      b1.position.set(-5, 0, 15);
       const b2 = new THREE.Mesh(barrelGeom, barrelMat);
-      b2.position.set(5, 0, 14);
+      b2.position.set(5, 0, 15);
       headGroup.add(b1);
       headGroup.add(b2);
 
       group.add(headGroup);
+
+      // Tower Health Bar Billboard
+      const towerHpBar = new THREE.Group();
+      towerHpBar.name = 'structHpBar';
+      towerHpBar.userData = { width: 34 };
+      towerHpBar.position.set(0, 68, 0);
+      towerHpBar.rotation.x = -Math.PI / 4;
+      const tHpBg = new THREE.Mesh(new THREE.PlaneGeometry(36, 4.2), new THREE.MeshBasicMaterial({ color: 0x090d16, side: THREE.DoubleSide }));
+      const tHpFill = new THREE.Mesh(new THREE.PlaneGeometry(34, 3), new THREE.MeshBasicMaterial({ color: isP1 ? 0x38bdf8 : 0xef4444, side: THREE.DoubleSide }));
+      tHpFill.name = 'hpFill';
+      tHpFill.position.z = 0.1;
+      towerHpBar.add(tHpBg);
+      towerHpBar.add(tHpFill);
+      group.add(towerHpBar);
     } else if (s.type === 'repair_station') {
-      // 3D Nano-Repair Bay with Floating Medical Cross
       const baseGeom = new THREE.BoxGeometry(s.width, 24, s.height);
       const baseMat = new THREE.MeshStandardMaterial({ color: 0x064e3b, roughness: 0.4 });
       const baseMesh = new THREE.Mesh(baseGeom, baseMat);
       baseMesh.position.y = 12;
       group.add(baseMesh);
 
-      // Holographic Floating Medical Cross
       const crossGroup = new THREE.Group();
       crossGroup.name = 'medicalCross';
-      crossGroup.position.y = 45;
+      crossGroup.position.y = 48;
 
-      const crossMat = new THREE.MeshBasicMaterial({ color: 0x10b981, wireframe: false });
-      const c1 = new THREE.Mesh(new THREE.BoxGeometry(6, 22, 6), crossMat);
-      const c2 = new THREE.Mesh(new THREE.BoxGeometry(22, 6, 6), crossMat);
+      const crossMat = new THREE.MeshBasicMaterial({ color: 0x10b981 });
+      const c1 = new THREE.Mesh(new THREE.BoxGeometry(6, 24, 6), crossMat);
+      const c2 = new THREE.Mesh(new THREE.BoxGeometry(24, 6, 6), crossMat);
       crossGroup.add(c1);
       crossGroup.add(c2);
       group.add(crossGroup);
     } else if (s.type === 'generator') {
-      // 3D Plasma Reactor with Spinning Turbine
       const baseGeom = new THREE.CylinderGeometry(s.width / 2, s.width / 2 + 4, 34, 16);
       const baseMat = new THREE.MeshStandardMaterial({ color: 0x312e81, metalness: 0.7 });
       const baseMesh = new THREE.Mesh(baseGeom, baseMat);
       baseMesh.position.y = 17;
       group.add(baseMesh);
 
-      // Glowing core sphere
       const coreGeom = new THREE.SphereGeometry(14, 16, 16);
       const coreMat = new THREE.MeshBasicMaterial({ color: 0xa5b4fc });
       const core = new THREE.Mesh(coreGeom, coreMat);
       core.position.y = 36;
       group.add(core);
     } else {
-      // Walls / Barracks
-      const geom = new THREE.BoxGeometry(s.width, 26, s.height);
+      const geom = new THREE.BoxGeometry(s.width, 28, s.height);
       const mat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.6 });
       const mesh = new THREE.Mesh(geom, mat);
-      mesh.position.y = 13;
+      mesh.position.y = 14;
       mesh.castShadow = true;
       group.add(mesh);
     }
@@ -573,20 +1019,17 @@ function update3DStructures(
       return;
     }
 
-    // HQ radar rotation
     const radar = group.getObjectByName('radarDish');
     if (radar) {
       radar.rotation.y = tick * 0.05;
     }
 
-    // Repair Bay cross rotation & floating bob
     const cross = group.getObjectByName('medicalCross');
     if (cross) {
       cross.rotation.y = tick * 0.04;
-      cross.position.y = 45 + Math.sin(tick * 0.1) * 4;
+      cross.position.y = 48 + Math.sin(tick * 0.1) * 4;
     }
 
-    // Turret aiming at targets
     const turretHead = group.getObjectByName('turretHead');
     if (turretHead && s.targetId) {
       const target = sim.units.find((u) => u.id === s.targetId);
@@ -597,188 +1040,23 @@ function update3DStructures(
         turretHead.rotation.y = angle;
       }
     }
-  });
-}
 
-function update3DUnits(
-  scene: THREE.Scene,
-  unitMapRef: React.MutableRefObject<Map<string, THREE.Group>>,
-  sim: GameSimulation,
-  tick: number,
-  _localPlayer: 'p1' | 'p2'
-) {
-  const currentIds = new Set(sim.units.map((u) => u.id));
-
-  // Remove deceased units
-  unitMapRef.current.forEach((group, id) => {
-    if (!currentIds.has(id)) {
-      scene.remove(group);
-      unitMapRef.current.delete(id);
+    // Update Structure Health Bar
+    const hpBar = group.getObjectByName('structHpBar');
+    if (hpBar) {
+      const ratio = Math.max(0, Math.min(1, s.hp / s.maxHp));
+      const hpFill = hpBar.getObjectByName('hpFill') as THREE.Mesh;
+      if (hpFill) {
+        const fullW = hpBar.userData.width || 34;
+        hpFill.scale.x = ratio;
+        hpFill.position.x = -fullW / 2 + (fullW * ratio) / 2;
+        const fillMat = hpFill.material as THREE.MeshBasicMaterial;
+        if (ratio < 0.25) fillMat.color.setHex(0xef4444);
+        else if (ratio < 0.55) fillMat.color.setHex(0xf59e0b);
+        else fillMat.color.setHex(s.owner === 'p1' ? 0x38bdf8 : 0xef4444);
+      }
     }
   });
-
-  // Create or update alive units
-  sim.units.forEach((u) => {
-    let group = unitMapRef.current.get(u.id);
-
-    if (!group) {
-      group = build3DUnitMesh(u);
-      scene.add(group);
-      unitMapRef.current.set(u.id, group);
-    }
-
-    const worldPos = new THREE.Vector3(u.x - MAP_WIDTH / 2, 0, u.y - MAP_HEIGHT / 2);
-
-    // Smooth position
-    group.position.lerp(worldPos, 0.4);
-
-    // Y-hover for speeder and walkers
-    if (u.classType === 'scout') {
-      group.position.y = 12 + Math.sin(tick * 0.15 + u.radius) * 3;
-    } else {
-      group.position.y = 0;
-    }
-
-    // Smooth rotation towards facing angle
-    // Facing angle is in 2D (radians). In 3D (X-Z plane), rotation around Y:
-    group.rotation.y = -u.facingAngle + Math.PI / 2;
-
-    // Selection ring visibility
-    const selRing = group.getObjectByName('selectionRing');
-    if (selRing) {
-      selRing.visible = !!u.selected;
-    }
-
-    // Forcefield pulse on Guardian
-    const forcefield = group.getObjectByName('forcefield');
-    if (forcefield) {
-      const s = 1 + Math.sin(tick * 0.12) * 0.08;
-      forcefield.scale.set(s, s, s);
-    }
-
-    // Heavy recoil animation when attacking
-    if (u.state === 'attacking' && (u.classType === 'heavy' || u.classType === 'siege')) {
-      const kick = Math.sin(tick * 0.8) * 4;
-      group.translateZ(-kick);
-    }
-  });
-}
-
-function build3DUnitMesh(unit: any): THREE.Group {
-  const group = new THREE.Group();
-  const isP1 = unit.owner === 'p1';
-  const mainColor = isP1 ? 0x0ea5e9 : 0xef4444;
-  const accentColor = isP1 ? 0x38bdf8 : 0xf87171;
-
-  // 1. Selection Ring (Ground Torus)
-  const selGeom = new THREE.TorusGeometry(unit.radius + 6, 1.5, 8, 24);
-  selGeom.rotateX(Math.PI / 2);
-  const selMat = new THREE.MeshBasicMaterial({ color: isP1 ? 0x38bdf8 : 0xf87171 });
-  const selRing = new THREE.Mesh(selGeom, selMat);
-  selRing.name = 'selectionRing';
-  selRing.position.y = 1;
-  selRing.visible = false;
-  group.add(selRing);
-
-  // 2. Class-specific 3D Unit Models
-  if (unit.classType === 'scout') {
-    // Cyber-Speeder hovering dart
-    const bodyGeom = new THREE.ConeGeometry(unit.radius, 28, 5);
-    bodyGeom.rotateX(-Math.PI / 2);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: mainColor, metalness: 0.6, roughness: 0.3 });
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.castShadow = true;
-    group.add(body);
-
-    // Glowing thrusters
-    const thrustGeom = new THREE.CylinderGeometry(2, 4, 8, 8);
-    const thrustMat = new THREE.MeshBasicMaterial({ color: accentColor });
-    const t1 = new THREE.Mesh(thrustGeom, thrustMat);
-    t1.position.set(-5, 0, -12);
-    const t2 = new THREE.Mesh(thrustGeom, thrustMat);
-    t2.position.set(5, 0, -12);
-    group.add(t1);
-    group.add(t2);
-  } else if (unit.classType === 'guardian') {
-    // Heavy Bipedal Mech with Aegis Sphere
-    const bodyGeom = new THREE.BoxGeometry(unit.radius * 1.8, 26, unit.radius * 1.6);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: mainColor, metalness: 0.5 });
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.position.y = 14;
-    body.castShadow = true;
-    group.add(body);
-
-    // Translucent Hexagonal Forcefield Bubble
-    const ffGeom = new THREE.SphereGeometry(unit.radius + 10, 16, 16);
-    const ffMat = new THREE.MeshBasicMaterial({
-      color: 0x38bdf8,
-      transparent: true,
-      opacity: 0.35,
-      wireframe: true,
-    });
-    const ff = new THREE.Mesh(ffGeom, ffMat);
-    ff.name = 'forcefield';
-    ff.position.y = 14;
-    group.add(ff);
-  } else if (unit.classType === 'heavy') {
-    // Heavy Dual-Cannon Siege Tank
-    const hullGeom = new THREE.BoxGeometry(unit.radius * 2, 18, unit.radius * 2);
-    const hullMat = new THREE.MeshStandardMaterial({ color: isP1 ? 0x0369a1 : 0x7f1d1d, metalness: 0.7 });
-    const hull = new THREE.Mesh(hullGeom, hullMat);
-    hull.position.y = 9;
-    hull.castShadow = true;
-    group.add(hull);
-
-    // Dual Heavy Cannons
-    const gunGeom = new THREE.CylinderGeometry(3.5, 3.5, 34, 8);
-    gunGeom.rotateX(Math.PI / 2);
-    const gunMat = new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.9 });
-    const g1 = new THREE.Mesh(gunGeom, gunMat);
-    g1.position.set(-6, 13, 14);
-    const g2 = new THREE.Mesh(gunGeom, gunMat);
-    g2.position.set(6, 13, 14);
-    group.add(g1);
-    group.add(g2);
-  } else if (unit.classType === 'siege') {
-    // Quad-Leg Mortar Artillery Platform
-    const baseGeom = new THREE.CylinderGeometry(unit.radius, unit.radius + 4, 16, 6);
-    const baseMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, metalness: 0.6 });
-    const base = new THREE.Mesh(baseGeom, baseMat);
-    base.position.y = 8;
-    group.add(base);
-
-    // Big Mortar Cannon tilted up 45 deg
-    const mortarGeom = new THREE.CylinderGeometry(6, 8, 30, 12);
-    mortarGeom.rotateX(Math.PI / 4);
-    const mortarMat = new THREE.MeshStandardMaterial({ color: 0xf59e0b, metalness: 0.8 });
-    const mortar = new THREE.Mesh(mortarGeom, mortarMat);
-    mortar.position.set(0, 18, 5);
-    group.add(mortar);
-  } else if (unit.classType === 'ranger') {
-    // Sniper Mech with Targeting Laser
-    const bodyGeom = new THREE.CylinderGeometry(6, 8, 22, 8);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: mainColor, metalness: 0.4 });
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.position.y = 11;
-    group.add(body);
-
-    // Sniper rifle
-    const rifleGeom = new THREE.CylinderGeometry(1.5, 2, 26, 8);
-    rifleGeom.rotateX(Math.PI / 2);
-    const rifleMat = new THREE.MeshStandardMaterial({ color: 0x475569 });
-    const rifle = new THREE.Mesh(rifleGeom, rifleMat);
-    rifle.position.set(4, 14, 12);
-    group.add(rifle);
-  } else {
-    // Assault Mech Trooper
-    const bodyGeom = new THREE.CylinderGeometry(8, 10, 24, 8);
-    const bodyMat = new THREE.MeshStandardMaterial({ color: mainColor, metalness: 0.5 });
-    const body = new THREE.Mesh(bodyGeom, bodyMat);
-    body.position.y = 12;
-    group.add(body);
-  }
-
-  return group;
 }
 
 function update3DProjectiles(
@@ -799,7 +1077,7 @@ function update3DProjectiles(
     let mesh = projMapRef.current.get(p.id);
 
     if (!mesh) {
-      const geom = new THREE.SphereGeometry(p.radius * 1.4, 8, 8);
+      const geom = new THREE.SphereGeometry(p.radius * 1.5, 8, 8);
       const mat = new THREE.MeshBasicMaterial({ color: p.color });
       mesh = new THREE.Mesh(geom, mat);
       scene.add(mesh);
@@ -809,11 +1087,10 @@ function update3DProjectiles(
     const worldX = p.x - MAP_WIDTH / 2;
     const worldZ = p.y - MAP_HEIGHT / 2;
 
-    // Arcing height for siege artillery mortar shells!
-    let heightY = 12;
+    let heightY = 14;
     if (p.isSiege) {
       const totalDist = Math.hypot(p.targetX - p.x, p.targetY - p.y);
-      heightY = 12 + Math.sin(Math.min(1, totalDist / 300) * Math.PI) * 120;
+      heightY = 14 + Math.sin(Math.min(1, totalDist / 300) * Math.PI) * 130;
     }
 
     mesh.position.set(worldX, heightY, worldZ);

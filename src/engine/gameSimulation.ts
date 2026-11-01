@@ -72,6 +72,7 @@ export class GameSimulation {
   // Slow-Mo Dramatic K.O.
   public isSlowMo: boolean = false;
   public slowMoTimer: number = 0;
+  private troopsDepletedTimer: number = 0;
 
   public stats: MatchStats = {
     winner: 'draw',
@@ -126,6 +127,7 @@ export class GameSimulation {
     this.screenShake = 0;
     this.isSlowMo = false;
     this.slowMoTimer = 0;
+    this.troopsDepletedTimer = 0;
     this.structures = INITIAL_STRUCTURES.map((s) => ({ ...s }));
 
     this.stats = {
@@ -481,6 +483,7 @@ export class GameSimulation {
     this.updateProjectiles(dt);
     this.updateVisualEffects(dt);
     this.checkHQDestruction();
+    this.checkTroopsDepletion(dt);
   }
 
   private updateStructures(dt: number) {
@@ -1005,6 +1008,69 @@ export class GameSimulation {
     this.isSlowMo = true;
     this.slowMoTimer = 1.6;
     this.triggerScreenShake(24);
+  }
+
+  private checkTroopsDepletion(dt: number) {
+    if (this.phase !== 'ATTACK_PHASE') return;
+
+    // Both players must have had a chance to deploy (e.g. at least 1 unit deployed across match or > 5s elapsed)
+    const totalDeployed = this.stats.p1UnitsDeployed + this.stats.p2UnitsDeployed;
+    if (totalDeployed === 0 && this.totalMatchElapsed < 5) return;
+
+    const p1HasTroops = this.p1Reserve.length > 0 || this.units.some((u) => u.owner === 'p1');
+    const p2HasTroops = this.p2Reserve.length > 0 || this.units.some((u) => u.owner === 'p2');
+
+    // If both players have no remaining troops (reserves empty and all units on field eliminated)
+    if (!p1HasTroops && !p2HasTroops) {
+      this.troopsDepletedTimer += dt;
+      // 0.8s buffer allows any mid-air artillery/laser shots to land and deal damage before finishing
+      if (this.troopsDepletedTimer >= 0.8) {
+        this.evaluateTroopsDepletedVictory();
+      }
+    } else {
+      this.troopsDepletedTimer = 0;
+    }
+  }
+
+  private evaluateTroopsDepletedVictory() {
+    const p1Stars = this.getPlayerStars('p1');
+    const p2Stars = this.getPlayerStars('p2');
+    const p1Destruction = this.getDestructionPercent('p1');
+    const p2Destruction = this.getDestructionPercent('p2');
+
+    // 1. Clash of Clans: Compare Stars (Most stars wins)
+    if (p1Stars > p2Stars) {
+      this.endMatch('p1', `All Troops Depleted: Superior Star Count (${p1Stars} ⭐ vs ${p2Stars} ⭐)`);
+      return;
+    } else if (p2Stars > p1Stars) {
+      this.endMatch('p2', `All Troops Depleted: Superior Star Count (${p2Stars} ⭐ vs ${p1Stars} ⭐)`);
+      return;
+    }
+
+    // 2. Stars tied: Compare Base Destruction Percentage (%)
+    if (p1Destruction > p2Destruction) {
+      this.endMatch('p1', `All Troops Depleted: Higher Base Destruction (${p1Destruction}% vs ${p2Destruction}%)`);
+      return;
+    } else if (p2Destruction > p1Destruction) {
+      this.endMatch('p2', `All Troops Depleted: Higher Base Destruction (${p2Destruction}% vs ${p1Destruction}%)`);
+      return;
+    }
+
+    // 3. Destruction tied: Compare Total Combat Damage Inflicted
+    if (this.stats.p1DamageDealt > this.stats.p2DamageDealt) {
+      this.endMatch('p1', `All Troops Depleted: Greater Combat Firepower (${Math.round(this.stats.p1DamageDealt)} vs ${Math.round(this.stats.p2DamageDealt)} Damage)`);
+      return;
+    } else if (this.stats.p2DamageDealt > this.stats.p1DamageDealt) {
+      this.endMatch('p2', `All Troops Depleted: Greater Combat Firepower (${Math.round(this.stats.p2DamageDealt)} vs ${Math.round(this.stats.p1DamageDealt)} Damage)`);
+      return;
+    }
+
+    // 4. Decisive tiebreak: Fewer squad losses wins (NEVER A DRAW!)
+    if (this.stats.p1UnitsLost <= this.stats.p2UnitsLost) {
+      this.endMatch('p1', `All Troops Depleted: Tactical Decisive Victory by Squad Preservation`);
+    } else {
+      this.endMatch('p2', `All Troops Depleted: Tactical Decisive Victory by Squad Preservation`);
+    }
   }
 
   private evaluateTimeoutVictory() {
